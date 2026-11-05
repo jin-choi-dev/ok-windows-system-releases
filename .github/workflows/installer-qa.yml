@@ -1,0 +1,38 @@
+name: Installer QA 1.2.8
+on:
+  push:
+    branches: [codex/installer-qa-1.2.8]
+permissions:
+  contents: read
+concurrency:
+  group: installer-qa-1.2.8
+  cancel-in-progress: false
+jobs:
+  installer:
+    runs-on: windows-2022
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [Fresh, ManualUpgrade, HelperUpgrade]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Download unchanged installers
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP 'ok-installers'
+          New-Item -ItemType Directory -Path $package -Force | Out-Null
+          gh release download qa-installer-1.2.8 --repo $env:GITHUB_REPOSITORY --pattern 'OKInsuranceCenter_Setup_1.2.8.exe' --dir $package
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate draft download failed' }
+          Invoke-WebRequest 'https://github.com/jin-choi-dev/ok-windows-system-releases/releases/download/v1.2.3/OKInsuranceCenter_Setup_1.2.3.exe' -OutFile (Join-Path $package 'OKInsuranceCenter_Setup_1.2.3.exe')
+      - name: Install and verify
+        shell: pwsh
+        env:
+          QA_SCENARIO: ${{ matrix.scenario }}
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP 'ok-installers'
+          & ./qa/Test-HostedInstaller.ps1 -Scenario $env:QA_SCENARIO -CandidateInstaller (Join-Path $package 'OKInsuranceCenter_Setup_1.2.8.exe') -BaselineInstaller (Join-Path $package 'OKInsuranceCenter_Setup_1.2.3.exe')
