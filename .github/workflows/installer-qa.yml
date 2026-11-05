@@ -3,7 +3,8 @@ on:
   push:
     branches: [codex/installer-qa-1.2.8]
 permissions:
-  contents: read
+  # Draft assets require push-level access; no step publishes a release.
+  contents: write
 concurrency:
   group: installer-qa-1.2.8
   cancel-in-progress: false
