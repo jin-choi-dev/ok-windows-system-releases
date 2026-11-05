@@ -24,6 +24,46 @@ $resultDirectory = Join-Path $env:RUNNER_TEMP ('ok-installer-' + $Scenario)
 $checks = [Collections.Generic.List[object]]::new()
 New-Item -ItemType Directory -Path $resultDirectory -Force | Out-Null
 
+# Use the Unicode ShellLink interface rather than WScript's empty COM result
+# on the runner. This reads metadata only; it never changes a shortcut.
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+public static class QAShellLink {
+    [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ILink {
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int size, IntPtr data, uint flags);
+        void GetIDList(out IntPtr id); void SetIDList(IntPtr id);
+        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int size);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string text);
+        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int size);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string text);
+        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int size);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string text);
+        void GetHotkey(out short key); void SetHotkey(short key);
+        void GetShowCmd(out int command); void SetShowCmd(int command);
+        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int size, out int index);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string path, int index);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
+        void Resolve(IntPtr window, uint flags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
+    }
+    public static string[] Read(string path) {
+        object instance = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046")));
+        try {
+            ((IPersistFile)instance).Load(path, 0);
+            var link = (ILink)instance;
+            var target = new StringBuilder(32768); var icon = new StringBuilder(32768);
+            link.GetPath(target, target.Capacity, IntPtr.Zero, 0);
+            int index; link.GetIconLocation(icon, icon.Capacity, out index);
+            return new[] {target.ToString(), icon.ToString()};
+        } finally {Marshal.ReleaseComObject(instance);}
+    }
+}
+'@
+
 function Assert-QA([bool]$Condition, [string]$Name) {
     $checks.Add([pscustomobject]@{Name=$Name;Passed=$Condition})
     if (!$Condition) { throw "FAILED: $Name" }
@@ -62,19 +102,18 @@ function Assert-Installed([string]$Version) {
     Assert-QA ((Get-ItemProperty -LiteralPath $key).DisplayVersion -eq $Version) ('Uninstall registry version ' + $Version)
     Assert-QA (Test-Path -LiteralPath (Join-Path $appDirectory ('app_icon_' + $Version + '.ico'))) 'Versioned shortcut icon installed'
     Assert-QA (!(Test-Path -LiteralPath (Join-Path $appDirectory ($appName + '.r2r.dll')))) 'No legacy composite R2R image'
-    $shell = New-Object -ComObject WScript.Shell
     $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
     $shortcutPath = Join-Path $desktop ($appName + '.lnk')
     Assert-QA (Test-Path -LiteralPath $shortcutPath) 'Desktop shortcut exists'
-    $shortcut = $shell.CreateShortcut($shortcutPath)
-    $target = [Environment]::ExpandEnvironmentVariables($shortcut.TargetPath)
+    $shortcut = [QAShellLink]::Read($shortcutPath)
+    $target = [Environment]::ExpandEnvironmentVariables($shortcut[0])
     Write-Host ('Shortcut target: ' + $target)
     Write-Host ('Expected target: ' + $appExe)
-    Write-Host ('Shortcut icon: ' + $shortcut.IconLocation)
+    Write-Host ('Shortcut icon: ' + $shortcut[1])
     # Shell shortcuts can return a short (8.3) name. Verify the actual file bytes too.
     Assert-QA (Test-Path -LiteralPath $target -PathType Leaf) 'Desktop shortcut target exists'
     Assert-QA ((Get-FileHash -LiteralPath $target).Hash -eq (Get-FileHash -LiteralPath $appExe).Hash) 'Desktop shortcut targets installed executable bytes'
-    Assert-QA ($shortcut.IconLocation -like ('*app_icon_' + $Version + '.ico*')) 'Desktop shortcut uses current version icon'
+    Assert-QA ($shortcut[1] -like ('*app_icon_' + $Version + '.ico*')) 'Desktop shortcut uses current version icon'
 }
 function Write-Fixtures {
     New-Item -ItemType Directory -Path $dataDirectory,$orderDirectory -Force | Out-Null
