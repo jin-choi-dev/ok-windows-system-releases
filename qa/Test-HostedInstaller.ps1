@@ -67,7 +67,13 @@ function Assert-Installed([string]$Version) {
     $shortcutPath = Join-Path $desktop ($appName + '.lnk')
     Assert-QA (Test-Path -LiteralPath $shortcutPath) 'Desktop shortcut exists'
     $shortcut = $shell.CreateShortcut($shortcutPath)
-    Assert-QA ($shortcut.TargetPath -eq $appExe) 'Desktop shortcut targets installed executable'
+    $target = [Environment]::ExpandEnvironmentVariables($shortcut.TargetPath)
+    Write-Host ('Shortcut target: ' + $target)
+    Write-Host ('Expected target: ' + $appExe)
+    Write-Host ('Shortcut icon: ' + $shortcut.IconLocation)
+    # Shell shortcuts can return a short (8.3) name. Verify the actual file bytes too.
+    Assert-QA (Test-Path -LiteralPath $target -PathType Leaf) 'Desktop shortcut target exists'
+    Assert-QA ((Get-FileHash -LiteralPath $target).Hash -eq (Get-FileHash -LiteralPath $appExe).Hash) 'Desktop shortcut targets installed executable bytes'
     Assert-QA ($shortcut.IconLocation -like ('*app_icon_' + $Version + '.ico*')) 'Desktop shortcut uses current version icon'
 }
 function Write-Fixtures {
