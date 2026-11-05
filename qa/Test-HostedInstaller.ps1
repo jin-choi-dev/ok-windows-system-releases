@@ -136,13 +136,34 @@ function Read-Fixtures {
         OrderHash=(Get-FileHash -LiteralPath (Join-Path $orderDirectory 'order_nonlife.json')).Hash
     }
 }
+function Convert-CanonicalValue($Value) {
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [pscustomobject]) {
+        $ordered = [ordered]@{}
+        foreach ($name in @($Value.PSObject.Properties.Name | Sort-Object)) {
+            $ordered[$name] = Convert-CanonicalValue $Value.$name
+        }
+        return $ordered
+    }
+    if ($Value -is [array]) {
+        $items = @(foreach ($item in $Value) { Convert-CanonicalValue $item })
+        return ,$items
+    }
+    return $Value
+}
 function Assert-Fixtures($Before, $After) {
     foreach ($name in @('ThemeId','CustomThemeColor','IsTopmost','MemoText')) {
         Assert-QA ($Before.Settings.$name -ceq $After.Settings.$name) ('Preserved setting ' + $name)
     }
     # Windows work-area clamping can legitimately change MainWindowHeight.
     Assert-QA ($After.Settings.MainWindowHeight -gt 0) 'Saved window height remains valid'
-    Assert-QA (($Before.Notes | ConvertTo-Json -Depth 20 -Compress) -ceq ($After.Notes | ConvertTo-Json -Depth 20 -Compress)) 'All note fields preserved'
+    $beforeNotes = Convert-CanonicalValue $Before.Notes | ConvertTo-Json -Depth 20 -Compress
+    $afterNotes = Convert-CanonicalValue $After.Notes | ConvertTo-Json -Depth 20 -Compress
+    if ($beforeNotes -cne $afterNotes) {
+        Write-Host ('Synthetic notes before: ' + $beforeNotes)
+        Write-Host ('Synthetic notes after: ' + $afterNotes)
+    }
+    Assert-QA ($beforeNotes -ceq $afterNotes) 'All note fields preserved (independent of JSON property order)'
     Assert-QA ($Before.LinksHash -ceq $After.LinksHash) 'Custom links file hash preserved'
     Assert-QA ($Before.OrderHash -ceq $After.OrderHash) 'Company order file hash preserved'
 }
